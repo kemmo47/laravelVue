@@ -1,61 +1,80 @@
-version: '3'
-
-networks:
-  laravel:
+version: '3.7'
 
 services:
-  nginx:
-    image: nginx:stable-alpine
-    container_name: nginx_training
-    ports: 
-      - "80:80"
-    volumes: 
-      - ./my-vue:/var/www/html
-      - ./docker/app/nginx.conf:/etc/nginx/conf.d/default.conf
-    depends_on:
-      - php
-      - mysql 
-      - composer_installation
-    networks:
-      - laravel
-
-  mysql:
+  database: 
     image: mysql:5.7.22
-    container_name: mysql_training
-    restart: always
+    container_name: database
+    restart: unless-stopped
     tty: true
-    ports: 
+    ports:
       - "3308:3306"
     command: --default-authentication-plugin=mysql_native_password
     volumes:
-      - ./docker/mysql:/var/lib/mysql
-      - ./init/backup.sql:/docker-entrypoint-initdb.d/backup.sql
+      - ./mysql:/var/lib/mysql
+      - ./init/todo.sql:/docker-entrypoint-initdb.d/todo.sql
     environment: 
       MYSQL_DATABASE: todo
-      MYSQL_USER: root
-      MYSQL_PASSWORD: null
-      MYSQL_ROOT_PASSWORD: null
+      MYSQL_USER: apptodo
+      MYSQL_PASSWORD: todo
+      MYSQL_ROOT_PASSWORD: todo
     networks:
-      - laravel
+      - app
 
-  php:
-    build: 
+  todo:
+    container_name: todo
+    build:
       context: .
-      dockerfile: ./docker/php-fpm/Dockerfile
-    container_name: php_training
-    volumes: 
-      - ./todo:/var/www/html
+      dockerfile: ./todo/.docker/Dockerfile
+    restart: always
+    environment:
+      SERVICE_NAME: php
+      SERVICE_TAGS: dev
+    volumes:
+      - ./todo:/var/www
+    working_dir: /var/www
+    command: ["/wait-for-it.sh", "database:3308", "--", "/build.sh"]
+    tty: true
+    networks:
+      - app
     ports:
       - "9000:9000"
-    networks:
-      - laravel
-    command: [php-fpm]
 
-  composer_installation:
-    container_name: composer_installation
-    image: composer
+  todo_proxy:
+    container_name: todo_proxy
+    build:
+      context: .
+      dockerfile: ./todo/.docker/Dockerfile.proxy
+    restart: unless-stopped
     volumes:
-      - ./todo:/app
-    command: composer install --ignore-platform-reqs
+      - ./my-vue:/var/www
+    command: ["/wait-for-it.sh", "todo:9000", "--", "nginx", "-g", "daemon off;"]
+    tty: true
     networks:
-      - laravel
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+
+  my-vue:
+    container_name: my-vue
+    build:
+      context: .
+      dockerfile: ./my-vue/.docker/Dockerfile
+    restart: unless-stopped
+    volumes:
+      - ./my-vue:/app
+    working_dir: /app
+    command: ["/wait-for-it.sh", "todo_proxy:80", "--", "/build.sh"]
+    tty: true
+    networks:
+      - app
+    ports:
+      - "8080:8080"
+    depends_on:
+      - todo_proxy
+      - database
+      - todo
+
+networks:
+  app:
+    driver: bridge
